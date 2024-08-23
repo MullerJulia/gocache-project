@@ -64,16 +64,33 @@ func (c *GoCache) Set(key, value string) {
 
 // Get retrieves a value from the cache and moves the accessed entry to the front of the LRU list.
 func (c *GoCache) Get(key string) (string, bool) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	if elem, found := c.cache[key]; found {
-		// Move accessed element to the front
-		c.lru.MoveToFront(elem)
-		return elem.Value.(*entry).value, true
+	// Acquire read lock
+	c.mutex.RLock()
+	elem, found := c.cache[key]
+	if !found {
+		// Release read lock early if key is not found
+		c.mutex.RUnlock()
+		return "", false
 	}
 
-	return "", false
+	// We found the key, but we need to move it to the front of the LRU list
+	value := elem.Value.(*entry).value
+
+	c.mutex.RUnlock() // Release read lock
+	c.mutex.Lock()    // Acquire write lock
+
+	// Before moving to the front, check if the element is still present
+	// This is a rare case where the element might have been removed in between locks
+	if elem, stillFound := c.cache[key]; stillFound {
+		c.lru.MoveToFront(elem)
+	}
+
+	// Downgrade to read lock for returning the value
+	c.mutex.Unlock() // Release write lock
+	c.mutex.RLock()  // Acquire read lock again
+
+	defer c.mutex.RUnlock()
+	return value, true
 }
 
 // evict removes the least recently used item from the cache.
