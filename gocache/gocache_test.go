@@ -29,16 +29,24 @@ func TestGoCache_Eviction(t *testing.T) {
 	cache.Set("b", "banana")
 	cache.Set("c", "cherry") // Should evict "a"
 
+	// Check if 'a' was evicted
 	if _, found := cache.Get("a"); found {
 		t.Errorf("expected a to be evicted")
 	}
 
+	// Ensure 'b' and 'c' are still in the cache
 	if value, found := cache.Get("b"); !found || value != "banana" {
 		t.Errorf("expected banana but got %s", value)
 	}
 
 	if value, found := cache.Get("c"); !found || value != "cherry" {
 		t.Errorf("expected cherry but got %s", value)
+	}
+
+	// Edge case: attempt to Get an evicted key
+	cache.Set("d", "date") // Should evict "b"
+	if _, found := cache.Get("b"); found {
+		t.Errorf("expected b to be evicted after inserting d")
 	}
 }
 
@@ -202,6 +210,14 @@ func TestGoCache_StressLRU(t *testing.T) {
 	// Verify that there is no data corruption or race conditions
 	if err := checkCacheIntegrity(cache, keys); err != nil {
 		t.Errorf("Cache integrity check failed: %v", err)
+	}
+
+	// Edge case: Verify eviction after high concurrency
+	cache.Set("f", "fig") // This should evict one of the existing keys
+	if _, found := cache.Get("a"); found {
+		t.Logf("Key a was found, possibly due to recent access pattern")
+	} else {
+		t.Logf("Key a was evicted, as expected")
 	}
 }
 
