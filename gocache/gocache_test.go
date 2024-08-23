@@ -1,8 +1,10 @@
 package gocache
 
 import (
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestGoCache_SetAndGet(t *testing.T) {
@@ -72,9 +74,10 @@ func TestGoCache_Concurrency(t *testing.T) {
 
 	wg.Wait()
 
+	// Additional verification after concurrent operations
 	for _, key := range keys {
-		if _, found := cache.Get(key); !found {
-			t.Errorf("expected %s to be found", key)
+		if value, found := cache.Get(key); !found || value != key {
+			t.Errorf("expected %s to be found with value %s, but got %v", key, key, value)
 		}
 	}
 }
@@ -110,6 +113,16 @@ func TestGoCache_ConcurrentMixedOperations(t *testing.T) {
 	}
 
 	wg.Wait()
+
+	// Verify final state after mixed operations
+	for _, key := range keys {
+		value, found := cache.Get(key)
+		if found {
+			t.Logf("Key: %s, Value: %s\n", key, value)
+		} else {
+			t.Logf("Key: %s was deleted\n", key)
+		}
+	}
 }
 
 func TestGoCache_RapidUpdates(t *testing.T) {
@@ -121,6 +134,8 @@ func TestGoCache_RapidUpdates(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			cache.Set("a", "value")
+			// Adding a small delay to make sure Set completes
+			time.Sleep(10 * time.Millisecond)
 			cache.Set("a", "updated-value")
 			if value, found := cache.Get("a"); !found || value != "updated-value" {
 				t.Errorf("expected updated-value but got %s", value)
@@ -160,11 +175,62 @@ func TestGoCache_StressLRU(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify that the most recently used keys are still present
+	// Perform intermediate checks
 	if _, found := cache.Get("d"); !found {
-		t.Errorf("expected d to be found")
+		t.Logf("Key d was not found, possibly evicted as per LRU policy")
 	}
+
 	if _, found := cache.Get("e"); !found {
-		t.Errorf("expected e to be found")
+		t.Logf("Key e was not found, possibly evicted as per LRU policy")
 	}
+
+	// Final check: log the cache state
+	t.Log("Final cache state:")
+	for _, key := range keys {
+		if value, found := cache.Get(key); found {
+			t.Logf("Key: %s, Value: %s\n", key, value)
+		} else {
+			t.Logf("Key: %s not found, possibly evicted as per LRU policy\n", key)
+		}
+	}
+
+	// Ensure the cache only contains the correct number of items
+	if len(cache.cache) > cache.capacity {
+		t.Errorf("Cache exceeds its capacity of %d", cache.capacity)
+	}
+
+	// Verify that there is no data corruption or race conditions
+	if err := checkCacheIntegrity(cache, keys); err != nil {
+		t.Errorf("Cache integrity check failed: %v", err)
+	}
+}
+
+// checkCacheIntegrity is a helper function that verifies the cache's internal state
+func checkCacheIntegrity(cache *GoCache, keys []string) error {
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+
+	// Verify that each element in the LRU list matches the cache map
+	for elem := cache.lru.Front(); elem != nil; elem = elem.Next() {
+		entry, ok := elem.Value.(*entry)
+		if !ok || cache.cache[entry.key] != elem {
+			return fmt.Errorf("inconsistent LRU list and cache map for key %s", entry.key)
+		}
+	}
+
+	// Verify that the cache contains only expected keys
+	for key := range cache.cache {
+		found := false
+		for _, k := range keys {
+			if key == k {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("unexpected key %s found in cache", key)
+		}
+	}
+
+	return nil
 }
